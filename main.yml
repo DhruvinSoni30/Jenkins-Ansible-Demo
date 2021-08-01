@@ -1,6 +1,7 @@
 ---
 - hosts: localhost  # Place where we are running Ansible
   connection: local # Connection 
+  gather_facts: no
   vars_files:
   - cred.yml
 
