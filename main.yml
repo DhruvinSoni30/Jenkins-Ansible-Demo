@@ -1,0 +1,207 @@
+---
+- hosts: localhost  # Place where we are running Ansible
+  connection: local # Connection 
+  vars_files:
+  - cred.yml
+
+  # Variables
+  vars:
+
+    # Default Names
+    title: "Demo"
+    vpc_name: "{{ title }} VPC"
+    igw_name: "{{ title }} IGW"
+    subnet_name: "{{ title }} Subnet"
+    acl_name: "{{ title }} ACL"
+    instance_name: "{{ title }} Instance" 
+    security_group_name: "{{ title }} Security Group"
+    route_table_name: "{{ title }} Route Table"
+
+    # Default values for CIDR Blocks
+    vpcCidrBlock: "10.0.0.0/16"
+    subNetCidrBlock: "10.0.1.0/24"
+    portCidrBlock: "0.0.0.0/0"
+    destinationCidrBlock: "0.0.0.0/0"
+
+    # State
+    state: "present"
+
+    # Default value of AZ & Regio
+    zone: "us-west-1a"
+    region: "us-west-1"
+
+  # List of tasks
+  tasks:
+    
+  # Creating VPC
+  - name: Create VPC
+    ec2_vpc_net:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      name: "{{ vpc_name }}"
+      cidr_block: "{{ vpcCidrBlock }}"
+      region: "{{ region }}"
+      dns_support: "yes"
+      dns_hostnames: "yes"
+      tenancy: "default"
+      state: "{{ state }}"
+      resource_tags:
+        Name: "{{ vpc_name }}"
+    register: vpc_result
+  
+  # Creating Internate Gateway
+  - name: Create Internet Gateway
+    ec2_vpc_igw:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      vpc_id: "{{ vpc_result.vpc.id }}" 
+      region: "{{ region }}"
+      state: "{{ state }}" 
+      tags:
+        Name: "{{ igw_name }}"
+    register: igw_result
+
+  # Creating Subnet
+  - name: Create Subnet
+    ec2_vpc_subnet:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      vpc_id: "{{ vpc_result.vpc.id }}" 
+      region: "{{ region }}"
+      state: "{{ state }}"
+      az: "{{ zone }}"  
+      cidr: "{{ subNetCidrBlock }}"
+      map_public: "yes"
+      resource_tags:
+        Name: "{{ subnet_name }}"
+    register: subnet_result
+  
+  # Creating Security Group
+  - name: Create Security Group
+    ec2_group:  
+      name: "{{ security_group_name }}"
+      description: "{{ security_group_name }}"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      vpc_id: "{{ vpc_result.vpc.id }}" 
+      region: "{{ region }}"
+      state: "{{ state }}"
+      tags:
+        Name: "{{ security_group_name  }}"
+      rules:
+        - proto: tcp
+          from_port: 80
+          to_port: 80
+          cidr_ip: "{{ portCidrBlock }}"
+        - proto: tcp
+          from_port: 443
+          to_port: 443
+          cidr_ip: "{{ portCidrBlock }}"
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: "{{ portCidrBlock }}"
+
+      rules_egress:
+        - proto: tcp
+          from_port: 80
+          to_port: 80
+          cidr_ip: "{{ portCidrBlock }}"
+        - proto: tcp
+          from_port: 443
+          to_port: 443
+          cidr_ip: "{{ portCidrBlock }}"
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: "{{ portCidrBlock }}"
+    register: security_group_result
+
+  # Creating NACLs for subnet   
+  - name: Create Network ACLs
+    ec2_vpc_nacl:
+      name: "{[ acl_name }}"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      vpc_id: "{{ vpc_result.vpc.id }}" 
+      region: "{{ region }}"
+      state: "{{ state }}" 
+      subnets: [ "{{ subnet_result.subnet.id }}" ]
+      tags:
+        Name: "{{ acl_name }}"
+      ingress:
+      # rule no, protocol, allow/deny, cidr, icmp_type, icmp_code, port from, port to
+        - [100, 'tcp', 'allow', '0.0.0.0/0', null, null, 0, 65535]
+        
+      # rule no, protocol, allow/deny, cidr, icmp_type, icmp_code, port from, port to
+      egress:
+        - [100, 'all', 'allow', '0.0.0.0/0', null, null, 0, 65535]
+
+  # Creating Route Table for subnet
+  - name: Create Route Table
+    ec2_vpc_route_table:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      vpc_id: "{{ vpc_result.vpc.id }}" 
+      region: "{{ region }}"
+      state: "{{ state }}" 
+      tags:
+        Name: "{{ route_table_name }}"
+      subnets: [ "{{ subnet_result.subnet.id }}" ]
+      routes:
+        - dest: "{{ destinationCidrBlock }}" 
+          gateway_id: "{{ igw_result.gateway_id }}"
+    register: public_route_table
+  
+  # Creating EC2 Instance
+  - name: Create EC2 Instance
+    ec2:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      instance_type: t2.micro
+      image: ami-04b6c97b14c54de18
+      wait: yes
+      region: "{{ region }}"
+      group: "{{ security_group_name }}"
+      key_name: tests
+      count: 1
+      vpc_subnet_id:  "{{ subnet_result.subnet.id }}" 
+      assign_public_ip: yes
+      instance_tags:
+        Name: "{{ instance_name }}"
+    register: ec2_result
+ 
+  # Adding newly created instance to host group
+  - name: Add new instance to host group
+    add_host:
+      hostname: "{{ item.public_ip  }}"
+      groupname: webserver
+    with_items: "{{ ec2_result.instances }}"
+  
+  # Wait for SSH to come up
+  - name: Wait for SSH to come up
+    wait_for:
+      host: "{{ item.public_ip }}"
+      port: 22
+      delay: 10 
+      state: started 
+    with_items: "{{ ec2_result.instances }}"
+
+# Deploying Apache Webserver
+- hosts: webserver
+  remote_user: ec2-user
+  become: yes
+  gather_facts: no
+  pre_tasks:
+    - name: 'install python'
+      raw: 'sudo apt-get -y install python'
+  tasks:
+    - name: Install Apache
+      yum:
+        name: httpd
+        state: present
+    - service:
+        name: httpd
+        state: started
+        enabled: yes
+
