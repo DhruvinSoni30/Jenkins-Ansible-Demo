@@ -171,38 +171,3 @@
       instance_tags:
         Name: "{{ instance_name }}"
     register: ec2_result
- 
-  # Adding newly created instance to host group
-  - name: Add new instance to host group
-    add_host:
-      hostname: "{{ item.public_ip  }}"
-      groupname: webserver
-    with_items: "{{ ec2_result.instances }}"
-  
-  # Wait for SSH to come up
-  - name: Wait for SSH to come up
-    wait_for:
-      host: "{{ item.public_ip }}"
-      port: 22
-      delay: 10 
-      state: started 
-    with_items: "{{ ec2_result.instances }}"
-
-# Deploying Apache Webserver
-- hosts: webserver
-  remote_user: ec2-user
-  become: yes
-  gather_facts: no
-  pre_tasks:
-    - name: 'install python'
-      raw: 'sudo apt-get -y install python'
-  tasks:
-    - name: Install Apache
-      yum:
-        name: httpd
-        state: present
-    - service:
-        name: httpd
-        state: started
-        enabled: yes
-
